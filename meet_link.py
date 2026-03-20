@@ -106,9 +106,7 @@ class MeetLinkApp:
     # -- Tray icon --
 
     def _create_tray_icon(self) -> pystray.Icon:
-        tooltip = "MeetLink"
-        if self.default_event_type:
-            tooltip = f"MeetLink — {self.default_event_type.name}"
+        tooltip = "MeetLink — One-time meeting link"
 
         menu = pystray.Menu(
             pystray.MenuItem(
@@ -132,11 +130,7 @@ class MeetLinkApp:
             url = create_single_use_link(self.token, self.default_event_type.uri)
             html = f'<a href="{url}">{self.default_event_type.name}</a>'
             copy_html_to_clipboard(html, f"{self.default_event_type.name}: {url}")
-            icon.notify(
-                f"Link copied! — {self.default_event_type.name} "
-                f"({self.default_event_type.duration} min)",
-                "MeetLink",
-            )
+            icon.notify("One-time meeting link copied!", "MeetLink")
         except Exception as exc:
             log.error("Failed to create link: %s", exc)
             icon.notify(f"Error: {exc}", "MeetLink")
@@ -151,10 +145,7 @@ class MeetLinkApp:
                 html = f'<a href="{url}">{event_type.name}</a>'
                 copy_html_to_clipboard(html, f"{event_type.name}: {url}")
                 if self.icon:
-                    self.icon.notify(
-                        f"Link copied! — {event_type.name} ({event_type.duration} min)",
-                        "MeetLink",
-                    )
+                    self.icon.notify("One-time meeting link copied!", "MeetLink")
                 return True
             except Exception as exc:
                 messagebox.showerror("MeetLink", f"Error creating link:\n{exc}")
@@ -170,7 +161,7 @@ class MeetLinkApp:
             self.default_event_type = event_type
             self._save_config()
             if self.icon:
-                self.icon.title = f"MeetLink — {event_type.name}"
+                self.icon.title = "MeetLink — One-time meeting link"
 
         SettingsWindow(self.root, self.event_types, self.default_event_type, on_save)
 
