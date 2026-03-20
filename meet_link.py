@@ -15,8 +15,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from calendly import (
     EventType,
+    UserInfo,
     create_single_use_link,
-    get_current_user_uri,
+    get_current_user,
     list_event_types,
 )
 from clipboard import copy_html_to_clipboard
@@ -36,6 +37,7 @@ class MeetLinkApp:
         self.root = tk.Tk()
         self.root.withdraw()
         self.token: str = ""
+        self.user: UserInfo | None = None
         self.event_types: list[EventType] = []
         self.default_event_type: EventType | None = None
         self.icon: pystray.Icon | None = None
@@ -46,8 +48,8 @@ class MeetLinkApp:
             sys.exit(1)
 
         try:
-            user_uri = get_current_user_uri(self.token)
-            self.event_types = list_event_types(self.token, user_uri)
+            self.user = get_current_user(self.token)
+            self.event_types = list_event_types(self.token, self.user.uri)
         except Exception as exc:
             messagebox.showerror("MeetLink", f"Failed to load event types:\n{exc}")
             sys.exit(1)
@@ -139,9 +141,11 @@ class MeetLinkApp:
         self.root.after(0, self._show_custom_link)
 
     def _show_custom_link(self) -> None:
-        def on_copy(event_type: EventType) -> bool:
+        def on_copy(event_type: EventType, share_override: dict | None) -> bool:
             try:
-                url = create_single_use_link(self.token, event_type.uri)
+                url = create_single_use_link(
+                    self.token, event_type.uri, share_override,
+                )
                 html = f'<a href="{url}">{event_type.name}</a>'
                 copy_html_to_clipboard(html, f"{event_type.name}: {url}")
                 if self.icon:
@@ -151,7 +155,10 @@ class MeetLinkApp:
                 messagebox.showerror("MeetLink", f"Error creating link:\n{exc}")
                 return False
 
-        CustomLinkWindow(self.root, self.event_types, on_copy)
+        assert self.user is not None
+        CustomLinkWindow(
+            self.root, self.event_types, self.user.timezone, on_copy,
+        )
 
     def _on_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         self.root.after(0, self._show_settings)

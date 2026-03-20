@@ -1,9 +1,34 @@
 """Tkinter UI dialogs for MeetLink."""
 
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, ttk
 
 from calendly import EventType
+
+WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAY_API_NAMES = (
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+)
+
+
+def _build_time_list() -> list[str]:
+    """Half-hour increments from 6:00 AM to 9:00 PM."""
+    times = []
+    for h in range(6, 22):
+        for m in (0, 30):
+            display_h = h % 12 or 12
+            suffix = "AM" if h < 12 else "PM"
+            times.append(f"{display_h}:{m:02d} {suffix}")
+    return times
+
+
+def _to_24h(time_str: str) -> str:
+    """Convert '9:00 AM' to '09:00'."""
+    return datetime.strptime(time_str, "%I:%M %p").strftime("%H:%M")
+
+
+TIMES = _build_time_list()
 
 
 class TokenDialog(tk.Toplevel):
@@ -16,7 +41,7 @@ class TokenDialog(tk.Toplevel):
         self.title("MeetLink - Setup")
         self.geometry("450x150")
         self.resizable(False, False)
-        self._center()
+        self._center(450, 150)
 
         frame = ttk.Frame(self, padding=20)
         frame.pack(fill="both", expand=True)
@@ -42,10 +67,10 @@ class TokenDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.grab_set()
 
-    def _center(self) -> None:
+    def _center(self, w: int, h: int) -> None:
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - 450) // 2
-        y = (self.winfo_screenheight() - 150) // 2
+        x = (self.winfo_screenwidth() - w) // 2
+        y = (self.winfo_screenheight() - h) // 2
         self.geometry(f"+{x}+{y}")
 
     def _on_ok(self) -> None:
@@ -62,64 +87,165 @@ class TokenDialog(tk.Toplevel):
 
 
 class CustomLinkWindow(tk.Toplevel):
-    """Pick an event type and copy a one-time link."""
+    """Create a one-time link with custom duration and availability."""
 
     def __init__(
         self,
         parent: tk.Tk,
         event_types: list[EventType],
-        on_copy: "callable[[EventType], bool]",
+        user_timezone: str,
+        on_copy: "callable[[EventType, dict | None], bool]",
     ) -> None:
         super().__init__(parent)
         self.event_types = event_types
+        self.user_timezone = user_timezone
         self.on_copy = on_copy
+        self._duration_values: tuple[int | None, ...] = ()
 
         self.title("MeetLink - Custom Link")
-        self.geometry("380x130")
         self.resizable(False, False)
-        self._center()
 
         frame = ttk.Frame(self, padding=20)
         frame.pack(fill="both", expand=True)
 
+        # -- Event type --
         ttk.Label(frame, text="Event type:").pack(anchor="w")
-
-        self.display_names = [
-            f"{et.name} ({et.duration} min)" for et in event_types
-        ]
-        self.combo_var = tk.StringVar()
-        combo = ttk.Combobox(
-            frame,
-            textvariable=self.combo_var,
-            values=self.display_names,
-            state="readonly",
-            width=45,
+        self.et_display = [f"{et.name} ({et.duration} min)" for et in event_types]
+        self.et_var = tk.StringVar()
+        self.et_combo = ttk.Combobox(
+            frame, textvariable=self.et_var, values=self.et_display,
+            state="readonly", width=45,
         )
-        combo.pack(fill="x", pady=(5, 10))
-        if self.display_names:
-            combo.current(0)
+        self.et_combo.pack(fill="x", pady=(2, 8))
+        self.et_combo.current(0)
+        self.et_combo.bind("<<ComboboxSelected>>", self._on_event_type_changed)
 
+        # -- Duration --
+        ttk.Label(frame, text="Duration:").pack(anchor="w")
+        self.dur_var = tk.StringVar()
+        self.dur_combo = ttk.Combobox(
+            frame, textvariable=self.dur_var, state="readonly", width=45,
+        )
+        self.dur_combo.pack(fill="x", pady=(2, 8))
+        self._update_duration_options()
+
+        # -- Limit availability toggle --
+        self.limit_avail_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame, text="Limit availability",
+            variable=self.limit_avail_var, command=self._toggle_availability,
+        ).pack(anchor="w", pady=(4, 4))
+
+        # -- Availability controls (hidden by default) --
+        self.avail_frame = ttk.LabelFrame(frame, text="Availability", padding=8)
+
+        days_frame = ttk.Frame(self.avail_frame)
+        days_frame.pack(anchor="w")
+        self.day_vars: dict[str, tk.BooleanVar] = {}
+        for i, day in enumerate(WEEKDAY_LABELS):
+            var = tk.BooleanVar(value=(i < 5))  # Mon-Fri pre-checked
+            ttk.Checkbutton(days_frame, text=day, variable=var).grid(
+                row=0, column=i, padx=2,
+            )
+            self.day_vars[day] = var
+
+        time_frame = ttk.Frame(self.avail_frame)
+        time_frame.pack(anchor="w", pady=(6, 0))
+        ttk.Label(time_frame, text="From:").pack(side="left")
+        self.from_var = tk.StringVar(value="9:00 AM")
+        ttk.Combobox(
+            time_frame, textvariable=self.from_var, values=TIMES,
+            state="readonly", width=10,
+        ).pack(side="left", padx=(4, 12))
+        ttk.Label(time_frame, text="To:").pack(side="left")
+        self.to_var = tk.StringVar(value="5:00 PM")
+        ttk.Combobox(
+            time_frame, textvariable=self.to_var, values=TIMES,
+            state="readonly", width=10,
+        ).pack(side="left", padx=4)
+
+        # -- Copy button --
         self.copy_btn = ttk.Button(frame, text="Copy Link", command=self._on_copy)
-        self.copy_btn.pack(side="right")
+        self.copy_btn.pack(side="right", pady=(10, 0))
 
+        self._center_auto()
         self.bind("<Escape>", lambda _: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.lift()
         self.focus_force()
 
-    def _center(self) -> None:
+    def _center_auto(self) -> None:
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - 380) // 2
-        y = (self.winfo_screenheight() - 130) // 2
-        self.geometry(f"+{x}+{y}")
+        w = self.winfo_reqwidth()
+        h = self.winfo_reqheight()
+        x = (self.winfo_screenwidth() - w) // 2
+        y = (self.winfo_screenheight() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _update_duration_options(self) -> None:
+        idx = self.et_display.index(self.et_var.get())
+        et = self.event_types[idx]
+        options = et.duration_options or (et.duration,)
+        if len(options) > 1:
+            options_str = ", ".join(str(d) for d in options)
+            display = [f"All options ({options_str} min)"] + [
+                f"{d} min" for d in options
+            ]
+            self._duration_values = (None, *options)
+        else:
+            display = [f"{options[0]} min"]
+            self._duration_values = (options[0],)
+        self.dur_combo.configure(values=display)
+        self.dur_combo.current(0)
+
+    def _on_event_type_changed(self, _event: tk.Event) -> None:
+        self._update_duration_options()
+
+    def _toggle_availability(self) -> None:
+        if self.limit_avail_var.get():
+            self.avail_frame.pack(fill="x", pady=(0, 4), before=self.copy_btn)
+        else:
+            self.avail_frame.pack_forget()
+        self._center_auto()
+
+    def _build_share_override(self) -> dict | None:
+        override: dict = {}
+
+        # Duration override (None = use all defaults)
+        dur_idx = self.dur_combo.current()
+        selected_duration = self._duration_values[dur_idx]
+        if selected_duration is not None and len(self._duration_values) > 1:
+            override["duration"] = selected_duration
+
+        # Availability override
+        if self.limit_avail_var.get():
+            from_time = _to_24h(self.from_var.get())
+            to_time = _to_24h(self.to_var.get())
+            rules = []
+            for i, day in enumerate(WEEKDAY_LABELS):
+                if self.day_vars[day].get():
+                    rules.append({
+                        "type": "wday",
+                        "wday": WEEKDAY_API_NAMES[i],
+                        "intervals": [{"from": from_time, "to": to_time}],
+                    })
+            if rules:
+                override["availability_rule"] = {
+                    "rules": rules,
+                    "timezone": self.user_timezone,
+                }
+
+        return override or None
 
     def _on_copy(self) -> None:
-        idx = self.display_names.index(self.combo_var.get())
+        idx = self.et_display.index(self.et_var.get())
         event_type = self.event_types[idx]
+        share_override = self._build_share_override()
+
         self.copy_btn.configure(text="Creating...", state="disabled")
         self.update()
 
-        success = self.on_copy(event_type)
+        success = self.on_copy(event_type, share_override)
         if success:
             self.destroy()
         else:
@@ -155,11 +281,8 @@ class SettingsWindow(tk.Toplevel):
         ]
         self.combo_var = tk.StringVar()
         combo = ttk.Combobox(
-            frame,
-            textvariable=self.combo_var,
-            values=self.display_names,
-            state="readonly",
-            width=45,
+            frame, textvariable=self.combo_var,
+            values=self.display_names, state="readonly", width=45,
         )
         combo.pack(fill="x", pady=(5, 10))
 

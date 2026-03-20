@@ -11,22 +11,30 @@ API_BASE = "https://api.calendly.com"
 
 
 @dataclass(frozen=True)
+class UserInfo:
+    uri: str
+    timezone: str
+
+
+@dataclass(frozen=True)
 class EventType:
     uri: str
     name: str
-    duration: int  # minutes
+    duration: int  # default duration in minutes
+    duration_options: tuple[int, ...] | None  # multi-duration choices, None if single
     active: bool
 
 
-def get_current_user_uri(token: str) -> str:
-    """Get the current user's Calendly URI."""
+def get_current_user(token: str) -> UserInfo:
+    """Get the current user's URI and timezone."""
     resp = requests.get(
         f"{API_BASE}/users/me",
         headers={"Authorization": f"Bearer {token}"},
         timeout=10,
     )
     resp.raise_for_status()
-    return resp.json()["resource"]["uri"]
+    resource = resp.json()["resource"]
+    return UserInfo(uri=resource["uri"], timezone=resource["timezone"])
 
 
 def list_event_types(token: str, user_uri: str) -> list[EventType]:
@@ -38,30 +46,43 @@ def list_event_types(token: str, user_uri: str) -> list[EventType]:
         timeout=10,
     )
     resp.raise_for_status()
-    return [
-        EventType(
-            uri=et["uri"],
-            name=et["name"],
-            duration=et["duration"],
-            active=et["active"],
+    result = []
+    for et in resp.json()["collection"]:
+        raw_options = et.get("duration_options")
+        duration_options = tuple(sorted(raw_options)) if raw_options else None
+        result.append(
+            EventType(
+                uri=et["uri"],
+                name=et["name"],
+                duration=et["duration"],
+                duration_options=duration_options,
+                active=et["active"],
+            )
         )
-        for et in resp.json()["collection"]
-    ]
+    return result
 
 
-def create_single_use_link(token: str, event_type_uri: str) -> str:
-    """Create a single-use scheduling link for an event type."""
+def create_single_use_link(
+    token: str,
+    event_type_uri: str,
+    share_override: dict | None = None,
+) -> str:
+    """Create a single-use scheduling link, optionally with overrides."""
+    body: dict = {
+        "max_event_count": 1,
+        "owner": event_type_uri,
+        "owner_type": "EventType",
+    }
+    if share_override:
+        body["share_override"] = share_override
+
     resp = requests.post(
         f"{API_BASE}/scheduling_links",
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         },
-        json={
-            "max_event_count": 1,
-            "owner": event_type_uri,
-            "owner_type": "EventType",
-        },
+        json=body,
         timeout=10,
     )
     resp.raise_for_status()
