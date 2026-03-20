@@ -6,6 +6,7 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 from calendly import EventType
+from startup import is_startup_enabled
 
 WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WEEKDAY_API_NAMES = (
@@ -288,23 +289,21 @@ class CustomLinkWindow(tk.Toplevel):
 
 
 class SettingsWindow(tk.Toplevel):
-    """Configure default event type for left-click."""
+    """Configure default event type and startup behavior."""
 
     def __init__(
         self,
         parent: tk.Tk,
         event_types: list[EventType],
         current_default: EventType | None,
-        on_save: "callable[[EventType], None]",
+        on_save: "callable[[EventType, bool], None]",
     ) -> None:
         super().__init__(parent)
         self.event_types = event_types
         self.on_save = on_save
 
         self.title("MeetLink - Settings")
-        self.geometry("380x130")
         self.resizable(False, False)
-        self._center()
 
         frame = ttk.Frame(self, padding=20)
         frame.pack(fill="both", expand=True)
@@ -330,6 +329,12 @@ class SettingsWindow(tk.Toplevel):
         if self.display_names:
             combo.current(default_idx)
 
+        self.startup_var = tk.BooleanVar(value=is_startup_enabled())
+        ttk.Checkbutton(
+            frame, text="Run at Windows startup",
+            variable=self.startup_var,
+        ).pack(anchor="w", pady=(0, 10))
+
         ttk.Button(frame, text="Save", command=self._on_save).pack(side="right")
 
         self.bind("<Escape>", lambda _: self.destroy())
@@ -337,13 +342,14 @@ class SettingsWindow(tk.Toplevel):
         self.lift()
         self.focus_force()
 
-    def _center(self) -> None:
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - 380) // 2
-        y = (self.winfo_screenheight() - 130) // 2
-        self.geometry(f"+{x}+{y}")
+        w = max(self.winfo_reqwidth() + 20, 380)
+        h = self.winfo_reqheight() + 10
+        x = (self.winfo_screenwidth() - w) // 2
+        y = (self.winfo_screenheight() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     def _on_save(self) -> None:
         idx = self.display_names.index(self.combo_var.get())
-        self.on_save(self.event_types[idx])
+        self.on_save(self.event_types[idx], self.startup_var.get())
         self.destroy()

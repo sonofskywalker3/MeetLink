@@ -21,6 +21,7 @@ from calendly import (
     list_event_types,
 )
 from clipboard import copy_html_to_clipboard
+from startup import set_startup_enabled
 from ui import CustomLinkWindow, SettingsWindow, TokenDialog
 
 log = logging.getLogger(__name__)
@@ -176,9 +177,10 @@ class MeetLinkApp:
         self.root.after(0, self._show_settings)
 
     def _show_settings(self) -> None:
-        def on_save(event_type: EventType) -> None:
+        def on_save(event_type: EventType, run_at_startup: bool) -> None:
             self.default_event_type = event_type
             self._save_config()
+            set_startup_enabled(run_at_startup)
             if self.icon:
                 self.icon.title = "MeetLink — One-time meeting link"
 
