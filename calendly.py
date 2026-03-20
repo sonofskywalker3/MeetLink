@@ -77,7 +77,7 @@ def create_single_use_link(
     if overrides:
         body.update(overrides)
 
-    log.info("POST /shares body: %s", json.dumps(body, indent=2))
+    log.debug("POST /shares body: %s", json.dumps(body, indent=2))
 
     resp = requests.post(
         f"{API_BASE}/shares",
@@ -88,6 +88,6 @@ def create_single_use_link(
         json=body,
         timeout=10,
     )
-    log.info("Response %s: %s", resp.status_code, resp.text[:500])
+    log.info("POST /shares → %s", resp.status_code)
     resp.raise_for_status()
     return resp.json()["resource"]["scheduling_links"][0]["booking_url"]

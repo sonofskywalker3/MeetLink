@@ -59,6 +59,8 @@ def copy_html_to_clipboard(html: str, plaintext: str) -> None:
         # HTML format
         html_bytes = cf_html_payload.encode("utf-8") + b"\x00"
         h_html = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(html_bytes))
+        if not h_html:
+            raise MemoryError("GlobalAlloc failed for HTML clipboard data")
         p_html = kernel32.GlobalLock(h_html)
         ctypes.memmove(p_html, html_bytes, len(html_bytes))
         kernel32.GlobalUnlock(h_html)
@@ -67,6 +69,8 @@ def copy_html_to_clipboard(html: str, plaintext: str) -> None:
         # Plaintext fallback
         text_bytes = plaintext.encode("utf-16-le") + b"\x00\x00"
         h_text = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(text_bytes))
+        if not h_text:
+            raise MemoryError("GlobalAlloc failed for text clipboard data")
         p_text = kernel32.GlobalLock(h_text)
         ctypes.memmove(p_text, text_bytes, len(text_bytes))
         kernel32.GlobalUnlock(h_text)

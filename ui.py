@@ -1,6 +1,7 @@
 """Tkinter UI dialogs for MeetLink."""
 
 import tkinter as tk
+import webbrowser
 from datetime import datetime
 from tkinter import messagebox, ttk
 
@@ -31,6 +32,9 @@ def _to_24h(time_str: str) -> str:
 TIMES = _build_time_list()
 
 
+CALENDLY_TOKEN_URL = "https://calendly.com/integrations/api_webhooks"
+
+
 class TokenDialog(tk.Toplevel):
     """Prompt for Calendly API token on first run."""
 
@@ -39,18 +43,44 @@ class TokenDialog(tk.Toplevel):
         self.result: str | None = None
 
         self.title("MeetLink - Setup")
-        self.geometry("450x150")
         self.resizable(False, False)
-        self._center(450, 150)
 
         frame = ttk.Frame(self, padding=20)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Enter your Calendly API token:").pack(anchor="w")
+        ttk.Label(
+            frame,
+            text="MeetLink needs a Calendly Personal Access Token.",
+            font=("", 10, "bold"),
+        ).pack(anchor="w")
 
+        instructions = ttk.Label(
+            frame,
+            text=(
+                "1. Click the link below to open Calendly Integrations\n"
+                "2. Under Personal Access Tokens, click Create New Token\n"
+                "3. Copy the token and paste it here"
+            ),
+            justify="left",
+        )
+        instructions.pack(anchor="w", pady=(6, 4))
+
+        link = ttk.Label(
+            frame,
+            text="Open Calendly Integrations page",
+            foreground="blue",
+            cursor="hand2",
+        )
+        link.pack(anchor="w", pady=(0, 10))
+        link.bind(
+            "<Button-1>",
+            lambda _: webbrowser.open(CALENDLY_TOKEN_URL),
+        )
+
+        ttk.Label(frame, text="Personal Access Token:").pack(anchor="w")
         self.token_var = tk.StringVar()
-        entry = ttk.Entry(frame, textvariable=self.token_var, width=50, show="*")
-        entry.pack(fill="x", pady=(5, 10))
+        entry = ttk.Entry(frame, textvariable=self.token_var, width=55, show="*")
+        entry.pack(fill="x", pady=(2, 10))
         entry.focus_set()
 
         btn_frame = ttk.Frame(frame)
@@ -67,11 +97,16 @@ class TokenDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.grab_set()
 
+        self.update_idletasks()
+        w = self.winfo_reqwidth() + 20
+        h = self.winfo_reqheight() + 10
+        self._center(w, h)
+
     def _center(self, w: int, h: int) -> None:
         self.update_idletasks()
         x = (self.winfo_screenwidth() - w) // 2
         y = (self.winfo_screenheight() - h) // 2
-        self.geometry(f"+{x}+{y}")
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     def _on_ok(self) -> None:
         token = self.token_var.get().strip()

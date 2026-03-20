@@ -1,5 +1,6 @@
 """MeetLink — system tray app for one-time Calendly scheduling links."""
 
+import html
 import json
 import logging
 import os
@@ -134,8 +135,10 @@ class MeetLinkApp:
 
         try:
             url = create_single_use_link(self.token, self.default_event_type.uri)
-            html = f'<a href="{url}">{self.default_event_type.name}</a>'
-            copy_html_to_clipboard(html, f"{self.default_event_type.name}: {url}")
+            safe_name = html.escape(self.default_event_type.name)
+            safe_url = html.escape(url, quote=True)
+            markup = f'<a href="{safe_url}">{safe_name}</a>'
+            copy_html_to_clipboard(markup, f"{self.default_event_type.name}: {url}")
             icon.notify("One-time meeting link copied!", "MeetLink")
         except Exception as exc:
             log.error("Failed to create link: %s", exc)
@@ -153,8 +156,10 @@ class MeetLinkApp:
                 url = create_single_use_link(
                     self.token, event_type.uri, overrides,
                 )
-                html = f'<a href="{url}">{event_type.name}</a>'
-                copy_html_to_clipboard(html, f"{event_type.name}: {url}")
+                safe_name = html.escape(event_type.name)
+                safe_url = html.escape(url, quote=True)
+                markup = f'<a href="{safe_url}">{safe_name}</a>'
+                copy_html_to_clipboard(markup, f"{event_type.name}: {url}")
                 if self.icon:
                     self.icon.notify("One-time meeting link copied!", "MeetLink")
                 return True
