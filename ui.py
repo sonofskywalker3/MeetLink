@@ -100,8 +100,6 @@ class CustomLinkWindow(tk.Toplevel):
         self.event_types = event_types
         self.user_timezone = user_timezone
         self.on_copy = on_copy
-        self._duration_values: tuple[int | None, ...] = ()
-
         self.title("MeetLink - Custom Link")
         self.resizable(False, False)
 
@@ -120,14 +118,12 @@ class CustomLinkWindow(tk.Toplevel):
         self.et_combo.current(0)
         self.et_combo.bind("<<ComboboxSelected>>", self._on_event_type_changed)
 
-        # -- Duration --
+        # -- Duration checkboxes --
         ttk.Label(frame, text="Duration:").pack(anchor="w")
-        self.dur_var = tk.StringVar()
-        self.dur_combo = ttk.Combobox(
-            frame, textvariable=self.dur_var, state="readonly", width=45,
-        )
-        self.dur_combo.pack(fill="x", pady=(2, 8))
-        self._update_duration_options()
+        self.dur_frame = ttk.Frame(frame)
+        self.dur_frame.pack(anchor="w", pady=(2, 8))
+        self.dur_vars: dict[int, tk.BooleanVar] = {}
+        self._build_duration_checkboxes()
 
         # -- Limit availability toggle --
         self.limit_avail_var = tk.BooleanVar(value=False)
@@ -182,24 +178,25 @@ class CustomLinkWindow(tk.Toplevel):
         y = (self.winfo_screenheight() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-    def _update_duration_options(self) -> None:
+    def _build_duration_checkboxes(self) -> None:
+        for widget in self.dur_frame.winfo_children():
+            widget.destroy()
+        self.dur_vars.clear()
+
         idx = self.et_display.index(self.et_var.get())
         et = self.event_types[idx]
         options = et.duration_options or (et.duration,)
-        if len(options) > 1:
-            options_str = ", ".join(str(d) for d in options)
-            display = [f"All options ({options_str} min)"] + [
-                f"{d} min" for d in options
-            ]
-            self._duration_values = (None, *options)
-        else:
-            display = [f"{options[0]} min"]
-            self._duration_values = (options[0],)
-        self.dur_combo.configure(values=display)
-        self.dur_combo.current(0)
+        for i, dur in enumerate(options):
+            label = f"{dur} min" if dur < 60 else f"{dur // 60} hr"
+            var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(self.dur_frame, text=label, variable=var).grid(
+                row=0, column=i, padx=4,
+            )
+            self.dur_vars[dur] = var
 
     def _on_event_type_changed(self, _event: tk.Event) -> None:
-        self._update_duration_options()
+        self._build_duration_checkboxes()
+        self._center_auto()
 
     def _toggle_availability(self) -> None:
         if self.limit_avail_var.get():
@@ -208,14 +205,17 @@ class CustomLinkWindow(tk.Toplevel):
             self.avail_frame.pack_forget()
         self._center_auto()
 
-    def _build_share_override(self) -> dict | None:
-        override: dict = {}
+    def _build_overrides(self) -> dict | None:
+        overrides: dict = {}
 
-        # Duration override (None = use all defaults)
-        dur_idx = self.dur_combo.current()
-        selected_duration = self._duration_values[dur_idx]
-        if selected_duration is not None and len(self._duration_values) > 1:
-            override["duration"] = selected_duration
+        # Duration — only override if not all options are checked
+        selected = [dur for dur, var in self.dur_vars.items() if var.get()]
+        all_options = list(self.dur_vars.keys())
+        if not selected:
+            selected = all_options  # must have at least one
+        if sorted(selected) != sorted(all_options):
+            overrides["duration_options"] = sorted(selected)
+            overrides["duration"] = selected[0]
 
         # Availability override
         if self.limit_avail_var.get():
@@ -230,17 +230,17 @@ class CustomLinkWindow(tk.Toplevel):
                         "intervals": [{"from": from_time, "to": to_time}],
                     })
             if rules:
-                override["availability_rule"] = {
+                overrides["availability_rule"] = {
                     "rules": rules,
                     "timezone": self.user_timezone,
                 }
 
-        return override or None
+        return overrides or None
 
     def _on_copy(self) -> None:
         idx = self.et_display.index(self.et_var.get())
         event_type = self.event_types[idx]
-        share_override = self._build_share_override()
+        share_override = self._build_overrides()
 
         self.copy_btn.configure(text="Creating...", state="disabled")
         self.update()

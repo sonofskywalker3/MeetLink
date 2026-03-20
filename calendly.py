@@ -1,5 +1,6 @@
 """Calendly API client."""
 
+import json
 import logging
 from dataclasses import dataclass
 
@@ -65,19 +66,21 @@ def list_event_types(token: str, user_uri: str) -> list[EventType]:
 def create_single_use_link(
     token: str,
     event_type_uri: str,
-    share_override: dict | None = None,
+    overrides: dict | None = None,
 ) -> str:
-    """Create a single-use scheduling link, optionally with overrides."""
-    body: dict = {
-        "max_event_count": 1,
-        "owner": event_type_uri,
-        "owner_type": "EventType",
-    }
-    if share_override:
-        body["share_override"] = share_override
+    """Create a single-use scheduling link via POST /shares.
+
+    Overrides (duration, duration_options, availability_rule, etc.)
+    go at the top level of the request body alongside event_type.
+    """
+    body: dict = {"event_type": event_type_uri}
+    if overrides:
+        body.update(overrides)
+
+    log.info("POST /shares body: %s", json.dumps(body, indent=2))
 
     resp = requests.post(
-        f"{API_BASE}/scheduling_links",
+        f"{API_BASE}/shares",
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -85,5 +88,6 @@ def create_single_use_link(
         json=body,
         timeout=10,
     )
+    log.info("Response %s: %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
-    return resp.json()["resource"]["booking_url"]
+    return resp.json()["resource"]["scheduling_links"][0]["booking_url"]

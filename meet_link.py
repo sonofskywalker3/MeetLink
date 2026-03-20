@@ -15,7 +15,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from calendly import (
     EventType,
-    UserInfo,
     create_single_use_link,
     get_current_user,
     list_event_types,
@@ -37,7 +36,7 @@ class MeetLinkApp:
         self.root = tk.Tk()
         self.root.withdraw()
         self.token: str = ""
-        self.user: UserInfo | None = None
+        self.user: object = None  # calendly.UserInfo
         self.event_types: list[EventType] = []
         self.default_event_type: EventType | None = None
         self.icon: pystray.Icon | None = None
@@ -59,6 +58,11 @@ class MeetLinkApp:
             sys.exit(1)
 
         self._load_config()
+
+        log.info("Loaded %d event types", len(self.event_types))
+        for et in self.event_types:
+            log.info("  %s (%d min, options=%s)", et.name, et.duration, et.duration_options)
+        log.info("Default: %s", self.default_event_type.name if self.default_event_type else "None")
 
         self.icon = self._create_tray_icon()
         threading.Thread(target=self.icon.run, daemon=True).start()
@@ -141,10 +145,13 @@ class MeetLinkApp:
         self.root.after(0, self._show_custom_link)
 
     def _show_custom_link(self) -> None:
-        def on_copy(event_type: EventType, share_override: dict | None) -> bool:
+        log.info("Opening custom link window")
+
+        def on_copy(event_type: EventType, overrides: dict | None) -> bool:
+            log.info("Custom link copy: %s, overrides=%s", event_type.name, overrides)
             try:
                 url = create_single_use_link(
-                    self.token, event_type.uri, share_override,
+                    self.token, event_type.uri, overrides,
                 )
                 html = f'<a href="{url}">{event_type.name}</a>'
                 copy_html_to_clipboard(html, f"{event_type.name}: {url}")
@@ -191,8 +198,19 @@ def _create_icon_image() -> Image.Image:
     return img
 
 
+LOG_FILE = Path("~/.meetlink/meetlink.log").expanduser()
+
+
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(LOG_FILE, mode="w"),
+        ],
+    )
     app = MeetLinkApp()
     app.run()
 
