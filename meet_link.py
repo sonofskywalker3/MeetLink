@@ -1,153 +1,202 @@
-"""Generate a one-time Calendly 'Meet with Jeff' link and copy to clipboard as a formatted hyperlink."""
+"""MeetLink — system tray app for one-time Calendly scheduling links."""
 
-import ctypes
+import json
 import logging
 import os
 import sys
+import threading
+import tkinter as tk
 from pathlib import Path
+from tkinter import messagebox
 
-import requests
+import pystray
 from dotenv import load_dotenv, set_key
+from PIL import Image, ImageDraw, ImageFont
+
+from calendly import (
+    EventType,
+    create_single_use_link,
+    get_current_user_uri,
+    list_event_types,
+)
+from clipboard import copy_html_to_clipboard
+from ui import CustomLinkWindow, SettingsWindow, TokenDialog
 
 log = logging.getLogger(__name__)
 
 ENV_FILE = Path("~/Documents/Projects/.env").expanduser()
+CONFIG_FILE = Path("~/.meetlink/config.json").expanduser()
 ENV_VAR_NAME = "CALENDLY_API_TOKEN"
-MEET_WITH_JEFF_URI = (
-    "https://api.calendly.com/event_types/31d28f5b-7018-4a6a-b0bb-eb30b57af007"
-)
-LINK_TEXT = "Meet with Jeff"
 
 
-def create_single_use_link(token: str) -> str:
-    """Create a single-use Calendly scheduling link."""
-    resp = requests.post(
-        "https://api.calendly.com/scheduling_links",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "max_event_count": 1,
-            "owner": MEET_WITH_JEFF_URI,
-            "owner_type": "EventType",
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()["resource"]["booking_url"]
+class MeetLinkApp:
+    """System tray application for generating Calendly links."""
 
+    def __init__(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.token: str = ""
+        self.event_types: list[EventType] = []
+        self.default_event_type: EventType | None = None
+        self.icon: pystray.Icon | None = None
 
-def copy_html_to_clipboard(html: str, plaintext: str) -> None:
-    """Copy HTML and plaintext fallback to the Windows clipboard."""
-    header_template = (
-        "Version:0.9\r\n"
-        "StartHTML:{start_html:010d}\r\n"
-        "EndHTML:{end_html:010d}\r\n"
-        "StartFragment:{start_frag:010d}\r\n"
-        "EndFragment:{end_frag:010d}\r\n"
-    )
-    dummy_header = header_template.format(
-        start_html=0, end_html=0, start_frag=0, end_frag=0
-    )
-    prefix = "<html><body>\r\n<!--StartFragment-->"
-    suffix = "<!--EndFragment-->\r\n</body></html>"
+    def run(self) -> None:
+        self.token = self._get_token()
+        if not self.token:
+            sys.exit(1)
 
-    start_html = len(dummy_header.encode("utf-8"))
-    start_frag = start_html + len(prefix.encode("utf-8"))
-    end_frag = start_frag + len(html.encode("utf-8"))
-    end_html = end_frag + len(suffix.encode("utf-8"))
+        try:
+            user_uri = get_current_user_uri(self.token)
+            self.event_types = list_event_types(self.token, user_uri)
+        except Exception as exc:
+            messagebox.showerror("MeetLink", f"Failed to load event types:\n{exc}")
+            sys.exit(1)
 
-    cf_html_payload = (
-        header_template.format(
-            start_html=start_html,
-            end_html=end_html,
-            start_frag=start_frag,
-            end_frag=end_frag,
+        if not self.event_types:
+            messagebox.showerror("MeetLink", "No active event types found in Calendly.")
+            sys.exit(1)
+
+        self._load_config()
+
+        self.icon = self._create_tray_icon()
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+        self.root.mainloop()
+
+    # -- Token management --
+
+    def _get_token(self) -> str:
+        load_dotenv(ENV_FILE)
+        token = os.environ.get(ENV_VAR_NAME)
+        if token:
+            return token
+
+        dialog = TokenDialog(self.root)
+        self.root.wait_window(dialog)
+        token = dialog.result
+
+        if token:
+            set_key(str(ENV_FILE), ENV_VAR_NAME, token)
+            os.environ[ENV_VAR_NAME] = token
+
+        return token or ""
+
+    # -- Config persistence --
+
+    def _load_config(self) -> None:
+        if CONFIG_FILE.exists():
+            data = json.loads(CONFIG_FILE.read_text())
+            uri = data.get("default_event_type_uri")
+            if uri:
+                self.default_event_type = next(
+                    (et for et in self.event_types if et.uri == uri), None
+                )
+
+        if not self.default_event_type:
+            self.default_event_type = self.event_types[0]
+            self._save_config()
+
+    def _save_config(self) -> None:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if self.default_event_type:
+            data["default_event_type_uri"] = self.default_event_type.uri
+        CONFIG_FILE.write_text(json.dumps(data, indent=2))
+
+    # -- Tray icon --
+
+    def _create_tray_icon(self) -> pystray.Icon:
+        tooltip = "MeetLink"
+        if self.default_event_type:
+            tooltip = f"MeetLink — {self.default_event_type.name}"
+
+        menu = pystray.Menu(
+            pystray.MenuItem(
+                "New Link", self._on_new_link, default=True, visible=False
+            ),
+            pystray.MenuItem("Custom Link...", self._on_custom_link),
+            pystray.MenuItem("Settings...", self._on_settings),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", self._on_exit),
         )
-        + prefix
-        + html
-        + suffix
-    )
+        return pystray.Icon("MeetLink", _create_icon_image(), tooltip, menu)
 
-    kernel32 = ctypes.windll.kernel32
-    user32 = ctypes.windll.user32
+    # -- Tray actions --
 
-    # Set proper 64-bit return/arg types for Windows API
-    kernel32.GlobalAlloc.restype = ctypes.c_void_p
-    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
-    kernel32.GlobalLock.restype = ctypes.c_void_p
-    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
-    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-    user32.SetClipboardData.restype = ctypes.c_void_p
-    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    def _on_new_link(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        if not self.default_event_type:
+            icon.notify("No default event type. Right-click → Settings.", "MeetLink")
+            return
 
-    CF_UNICODETEXT = 13
-    CF_HTML = user32.RegisterClipboardFormatW("HTML Format")
-    GMEM_MOVEABLE = 0x0002
+        try:
+            url = create_single_use_link(self.token, self.default_event_type.uri)
+            html = f'<a href="{url}">{self.default_event_type.name}</a>'
+            copy_html_to_clipboard(html, f"{self.default_event_type.name}: {url}")
+            icon.notify(
+                f"Link copied! — {self.default_event_type.name} "
+                f"({self.default_event_type.duration} min)",
+                "MeetLink",
+            )
+        except Exception as exc:
+            log.error("Failed to create link: %s", exc)
+            icon.notify(f"Error: {exc}", "MeetLink")
 
-    if not user32.OpenClipboard(0):
-        raise OSError("Cannot open clipboard")
+    def _on_custom_link(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self.root.after(0, self._show_custom_link)
 
+    def _show_custom_link(self) -> None:
+        def on_copy(event_type: EventType) -> bool:
+            try:
+                url = create_single_use_link(self.token, event_type.uri)
+                html = f'<a href="{url}">{event_type.name}</a>'
+                copy_html_to_clipboard(html, f"{event_type.name}: {url}")
+                if self.icon:
+                    self.icon.notify(
+                        f"Link copied! — {event_type.name} ({event_type.duration} min)",
+                        "MeetLink",
+                    )
+                return True
+            except Exception as exc:
+                messagebox.showerror("MeetLink", f"Error creating link:\n{exc}")
+                return False
+
+        CustomLinkWindow(self.root, self.event_types, on_copy)
+
+    def _on_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        self.root.after(0, self._show_settings)
+
+    def _show_settings(self) -> None:
+        def on_save(event_type: EventType) -> None:
+            self.default_event_type = event_type
+            self._save_config()
+            if self.icon:
+                self.icon.title = f"MeetLink — {event_type.name}"
+
+        SettingsWindow(self.root, self.event_types, self.default_event_type, on_save)
+
+    def _on_exit(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        icon.stop()
+        self.root.after(0, self.root.quit)
+
+
+def _create_icon_image() -> Image.Image:
+    """Generate the tray icon: blue rounded square with white M."""
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([2, 2, 62, 62], radius=10, fill="#0069FF")
     try:
-        user32.EmptyClipboard()
-
-        # HTML format
-        html_bytes = cf_html_payload.encode("utf-8") + b"\x00"
-        h_html = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(html_bytes))
-        p_html = kernel32.GlobalLock(h_html)
-        ctypes.memmove(p_html, html_bytes, len(html_bytes))
-        kernel32.GlobalUnlock(h_html)
-        user32.SetClipboardData(CF_HTML, h_html)
-
-        # Plaintext fallback
-        text_bytes = plaintext.encode("utf-16-le") + b"\x00\x00"
-        h_text = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(text_bytes))
-        p_text = kernel32.GlobalLock(h_text)
-        ctypes.memmove(p_text, text_bytes, len(text_bytes))
-        kernel32.GlobalUnlock(h_text)
-        user32.SetClipboardData(CF_UNICODETEXT, h_text)
-    finally:
-        user32.CloseClipboard()
-
-
-def get_token() -> str:
-    """Load the Calendly API token from env, prompting and saving if missing."""
-    load_dotenv(ENV_FILE)
-    token = os.environ.get(ENV_VAR_NAME)
-    if token:
-        return token
-
-    log.info("No %s found in %s", ENV_VAR_NAME, ENV_FILE)
-    token = input("Paste your Calendly API token: ").strip()
-    if not token:
-        log.error("No token provided.")
-        sys.exit(1)
-
-    set_key(str(ENV_FILE), ENV_VAR_NAME, token)
-    os.environ[ENV_VAR_NAME] = token
-    log.info("Token saved to %s", ENV_FILE)
-    return token
+        font = ImageFont.truetype("arial.ttf", 36)
+    except OSError:
+        font = ImageFont.load_default()
+    draw.text((32, 34), "M", fill="white", font=font, anchor="mm")
+    return img
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    token = get_token()
-
-    log.info("Creating single-use scheduling link...")
-    try:
-        url = create_single_use_link(token)
-    except requests.RequestException as exc:
-        log.error("Calendly API error: %s", exc)
-        sys.exit(1)
-
-    html = f'<a href="{url}">{LINK_TEXT}</a>'
-    copy_html_to_clipboard(html, f"{LINK_TEXT}: {url}")
-
-    log.info("Copied to clipboard: %s", LINK_TEXT)
-    log.info("Link: %s", url)
-    log.info("Paste into Zammad to insert formatted link.")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    app = MeetLinkApp()
+    app.run()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+[project]
+name = "meetlink"
+version = "0.1.0"
+description = "System tray app for generating one-time Calendly scheduling links"
+requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "python-dotenv",
+    "pystray",
+    "Pillow",
+]
